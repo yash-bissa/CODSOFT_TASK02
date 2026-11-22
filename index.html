@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Movie Genre Classification</title>
+<style>
+:root{color-scheme:light;--bg:#f7f6f2;--panel:#fff;--ink:#182622;--muted:#4b6259;--line:#d3ded7;--accent:#175b47;--on:#fff;--wash:#e5f0e8;--error:#a13134}
+:root[data-theme="dark"]{color-scheme:dark;--bg:#101a16;--panel:#182720;--ink:#edf6ef;--muted:#b0c7bb;--line:#365347;--accent:#98edc5;--on:#112b20;--wash:#203b30;--error:#ffabae}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 system-ui,sans-serif}
+main{max-width:1130px;margin:auto;padding:28px 24px 60px}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px;padding-bottom:22px;border-bottom:1px solid var(--line);font-weight:650}
+.hero{padding:30px 0 25px}
+h1{font:clamp(2.5rem,6vw,4.5rem)/1.03 Georgia,serif;letter-spacing:-.045em;margin:0 0 12px}
+h2{font:1.75rem/1.2 Georgia,serif;margin:0 0 12px}
+p{margin:0 0 14px;color:var(--muted)}
+.layout{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(0,1fr);gap:20px;align-items:start}
+.panel{padding:24px;background:var(--panel);border:1px solid var(--line);border-radius:20px}
+.side{display:grid;gap:20px}
+button,input,select,textarea{font:inherit}
+button{cursor:pointer;border:1px solid var(--line);border-radius:100px;padding:8px 15px;background:var(--panel);color:var(--ink);font-weight:650}
+button:hover{background:var(--wash)}
+button.primary{background:var(--accent);color:var(--on);border-color:var(--accent)}
+button:disabled{opacity:.65;cursor:wait}
+:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
+label{display:block;font-size:.91rem;font-weight:650}
+input,select,textarea{display:block;width:100%;background:var(--bg);border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:9px 11px;margin-top:5px}
+textarea{min-height:225px;resize:vertical}
+.fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 16px}
+.actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:20px}
+.metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+.metric{background:var(--wash);padding:10px 12px;border-radius:11px}
+.metric strong{display:block;font-size:1.24rem}
+.metric span, small{color:var(--muted)}
+.score{margin-top:10px}
+.score div{display:flex;justify-content:space-between;gap:8px}
+progress{width:100%;height:10px;accent-color:var(--accent)}
+.error{color:var(--error);overflow-wrap:anywhere}
+@media(max-width:740px){.layout{grid-template-columns:1fr}}
+@media(max-width:430px){main{padding-inline:14px}.panel{padding:16px}.fields{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+<header><span>CodSoft · Machine Learning · Task 1</span><button type="button" id="theme">Dark mode</button></header>
+<section class="hero"><h1>Movie Genre Classification</h1><p>Paste an English plot summary to see the three most likely genres.</p></section>
+<div class="layout">
+<section class="panel">
+<h2>Movie plot</h2>
+<form id="form">
+<label for="plot">Plot summary</label><textarea name="plot" id="plot" required maxlength="6000" placeholder="A detective returns to her hometown to investigate…"></textarea>
+<div class="actions"><button class="primary" type="submit" id="submit">Predict genre</button>
+<button type="button" id="example">Load example</button></div>
+</form>
+</section>
+<div class="side">
+<section class="panel"><h2>Prediction</h2><div id="result" aria-live="polite"><p>Enter a plot or load an example to see genre scores.</p></div></section>
+<section class="panel"><h2>Model evaluation</h2><div id="evaluation" aria-live="polite"><p>Training on the local dataset…</p></div></section>
+</div>
+</div>
+</main>
+<script>
+const task = 1;
+const theme = document.querySelector("#theme");
+const form = document.querySelector("#form");
+const result = document.querySelector("#result");
+const evaluation = document.querySelector("#evaluation");
+const submit = document.querySelector("#submit");
+const percent = score => new Intl.NumberFormat("en", {style:"percent", maximumFractionDigits:1}).format(score);
+
+function setTheme(value) {
+  document.documentElement.dataset.theme = value;
+  theme.textContent = value === "dark" ? "Light mode" : "Dark mode";
+}
+setTheme(localStorage.getItem("theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+theme.onclick = () => {
+  const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  setTheme(next);
+  localStorage.setItem("theme", next);
+};
+
+const example = {"plot": "A detective investigates a series of murders in a coastal town. As she tracks the killer, she discovers that a witness has been hiding evidence and that someone is watching her every move."};
+document.querySelector("#example").onclick = () => {
+  for (const [key, value] of Object.entries(example)) form.elements[key].value = value;
+};
+
+function element(tag, text, className = "") {
+  const node = document.createElement(tag);
+  node.textContent = text;
+  node.className = className;
+  return node;
+}
+async function request(url, options) {
+  const response = await fetch(url, options);
+  const data = await response.json();
+  if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Check the input and try again.");
+  return data;
+}
+const ready = request("/api/metrics").then(data => {
+  const metrics = element("div", "", "metrics");
+  const values = [["Accuracy", percent(data.accuracy)], [data.f1_label, percent(data.f1)],
+                  ["Held-out records", data.test_size.toLocaleString()]];
+  if (data.recall !== undefined) values.push(["Churn recall", percent(data.recall)]);
+  for (const [label, value] of values) {
+    const card = element("div", "", "metric");
+    card.append(element("strong", value), element("span", label));
+    metrics.append(card);
+  }
+  evaluation.replaceChildren(element("p", data.model), metrics);
+  return true;
+}).catch(error => {
+  evaluation.replaceChildren(element("p", error.message, "error"));
+  return false;
+});
+
+form.onsubmit = async event => {
+  event.preventDefault();
+  submit.disabled = true;
+  result.replaceChildren(element("p", "Calculating prediction…"));
+  const data = Object.fromEntries(new FormData(form));
+  const input = task === 1 ? data.plot : {
+    ...data, HasCrCard: Number(data.HasCrCard), IsActiveMember: Number(data.IsActiveMember)
+  };
+  try {
+    if (!await ready) throw new Error("Check the model evaluation panel, then reload the page.");
+    const scores = await request("/api/predict", {
+      method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({input})
+    });
+    result.replaceChildren(element("strong", scores[0].label),
+      element("p", task === 1 ? "Top genre scores" : "Estimated churn score · 50% decision threshold"));
+    for (const score of scores) {
+      const row = element("div", "", "score");
+      const label = task === 1 ? score.label : "Churn";
+      const caption = element("div", "");
+      caption.append(element("span", label), element("span", percent(score.score)));
+      const bar = element("progress", "");
+      bar.max = 1;
+      bar.value = score.score;
+      bar.setAttribute("aria-label", label + " score");
+      row.append(caption, bar);
+      result.append(row);
+    }
+  } catch (error) {
+    result.replaceChildren(element("p", error.message, "error"));
+  } finally {
+    submit.disabled = false;
+  }
+};
+</script>
+</body>
+</html>
